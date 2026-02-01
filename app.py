@@ -10,7 +10,7 @@ import time
 import io
 
 # --- 1. SETUP HALAMAN ---
-st.set_page_config(page_title="My Life OS 9.0 (Complete)", layout="wide", page_icon="🧬")
+st.set_page_config(page_title="My Life OS 12.0 (Archive Master)", layout="wide", page_icon="🧬")
 
 # ==========================================
 # 🔒 SISTEM KEAMANAN (LOGIN)
@@ -25,13 +25,14 @@ def check_password():
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
         st.title("🔒 Restricted Access")
+        st.write("Sistem terkunci. Silakan masukkan kunci akses Anda.")
         pwd = st.text_input("Password:", type="password")
-        if st.button("Masuk"):
+        if st.button("Buka Gembok 🔓"):
             if pwd == st.secrets["APP_PASSWORD"]:
                 st.session_state["password_correct"] = True
                 st.rerun()
             else:
-                st.error("⛔ Password Salah")
+                st.error("⛔ Password Salah! Akses ditolak.")
     return False
 
 if not check_password(): st.stop()
@@ -56,6 +57,7 @@ def init_connection():
         client = gspread.authorize(creds)
         sh = client.open("productivity_db")
         
+        # Cek/Buat Tab Advisor jika belum ada
         try: ws_adv = sh.worksheet("advisor")
         except: ws_adv = sh.add_worksheet("advisor", rows=1000, cols=3); ws_adv.append_row(["Timestamp", "Pertanyaan", "Jawaban"])
 
@@ -122,6 +124,70 @@ def fix_headers_only():
         st.toast("Tabel diperbaiki!", icon="🛠️"); clear_cache_and_rerun()
     except: pass
 
+# --- FUNGSI ARSIP PINTAR (UNIVERSAL) ---
+def render_archive_system(df, date_col, title_col, subtitle_col=None, type_col=None):
+    """
+    Fungsi canggih untuk membuat arsip bertingkat: Tahun > Bulan > Hari.
+    Digunakan ulang di ToDo, Uang, Jurnal, dan Advisor.
+    """
+    if df.empty:
+        st.caption("Belum ada data arsip.")
+        return
+
+    try:
+        # 1. Persiapan Data Tanggal
+        df['DateObj'] = pd.to_datetime(df[date_col], errors='coerce')
+        df['Tahun'] = df['DateObj'].dt.year
+        df['Bulan'] = df['DateObj'].dt.month_name()
+        df['Hari'] = df['DateObj'].dt.day_name()
+        df['Tanggal_Angka'] = df['DateObj'].dt.day
+        
+        # Ambil daftar tahun unik
+        years = sorted(df['Tahun'].dropna().unique(), reverse=True)
+        
+        if not years:
+            st.caption("Format tanggal data tidak valid.")
+            return
+
+        # 2. Level 1: TAHUN (Expander)
+        for y in years:
+            with st.expander(f"📂 Arsip Tahun {int(y)}"):
+                df_year = df[df['Tahun'] == y]
+                
+                # Level 2: BULAN (Tabs agar rapi dan tidak nested expander error)
+                months = df_year['Bulan'].unique()
+                if len(months) > 0:
+                    tabs = st.tabs([str(m) for m in months])
+                    
+                    for i, m in enumerate(months):
+                        with tabs[i]:
+                            df_month = df_year[df_year['Bulan'] == m]
+                            
+                            # Level 3: HARI (Grouping by date)
+                            dates = sorted(df_month['Tanggal_Angka'].unique(), reverse=True)
+                            
+                            for d in dates:
+                                df_day = df_month[df_month['Tanggal_Angka'] == d]
+                                day_name = df_day['Hari'].iloc[0] if not df_day.empty else ""
+                                
+                                st.markdown(f"**🗓️ {day_name}, {int(d)} {m} {int(y)}**")
+                                
+                                # Render Item
+                                for idx, row in df_day.iterrows():
+                                    title = row[title_col]
+                                    sub = f"{row[subtitle_col]}" if subtitle_col and subtitle_col in row else ""
+                                    
+                                    # Warna khusus jika ada tipe (misal Keuangan)
+                                    color_str = ""
+                                    if type_col and type_col in row:
+                                        color = "red" if row[type_col] == "Pengeluaran" else "green"
+                                        color_str = f":{color}[{row[type_col]}]"
+                                    
+                                    st.caption(f"• {color_str} **{title}** {f'({sub})' if sub else ''}")
+                                st.divider()
+    except Exception as e:
+        st.error(f"Gagal memuat arsip: {e}")
+
 # --- SIDEBAR ---
 with st.sidebar:
     st.title("🧬 My Life OS")
@@ -157,7 +223,7 @@ with st.sidebar:
     if st.button("🛠️ Fix Error"): fix_headers_only()
 
 # --- TABS ---
-tab_home, tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏠 Home", "📝 ToDo", "💰 Uang", "✅ Habit", "📔 Jurnal", "🤖 Advisor"])
+tab_home, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🏠 Home", "📝 ToDo", "💰 Uang", "✅ Habit", "📔 Jurnal", "🤖 Advisor", "🗄️ Database"])
 
 with tab_home: # DASHBOARD
     st.header(f"Dashboard Level {level}")
@@ -180,17 +246,20 @@ with tab_home: # DASHBOARD
     st.divider()
     g1, g2 = st.columns(2)
     with g1:
+        st.subheader("Porsi Pengeluaran")
         if not df_fin.empty: 
             df_out = df_fin[df_fin['Tipe']=='Pengeluaran']
             if not df_out.empty: st.plotly_chart(px.pie(df_out, values='Jumlah', names='Kategori', hole=0.4), use_container_width=True)
     with g2:
+        st.subheader("Konsistensi Habit")
         if not df_habit.empty:
             df_done = df_habit[df_habit['Status']=='Done']
             if not df_done.empty: 
                 cnt=df_done['Habit'].value_counts().reset_index(); cnt.columns=['H','C']
                 st.plotly_chart(px.bar(cnt, x='C', y='H', orientation='h'), use_container_width=True)
 
-with tab1: # TODO
+# === TAB 1: TODO (VISUAL + ARCHIVE) ===
+with tab1:
     c1,c2,c3=st.columns([3,1,1])
     with c1: t=st.text_input("Tugas", key="t")
     with c2: p=st.selectbox("Prio", ["Tinggi","Sedang","Rendah"], key="p")
@@ -199,44 +268,68 @@ with tab1: # TODO
         if st.button("➕", use_container_width=True) and t: sheets["todo"].append_row([str(datetime.now()), t, p, "Pending"]); clear_cache_and_rerun()
     
     if not df_todo.empty:
-        # --- GRAFIK PRIORITAS DIKEMBALIKAN ---
-        with st.expander("📊 Grafik Prioritas"):
+        # Grafik & Tabel
+        with st.expander("📊 Grafik & Tabel"):
              prio = df_todo['Prioritas'].value_counts().reset_index(); prio.columns=['P','C']
-             st.plotly_chart(px.bar(prio, x='P', y='C', color='P'), use_container_width=True)
+             c_g1, c_g2 = st.columns(2)
+             c_g1.plotly_chart(px.bar(prio, x='P', y='C', color='P', title="Distribusi Prioritas"), use_container_width=True)
+             c_g2.dataframe(df_todo, use_container_width=True) 
         
-        st.dataframe(df_todo, use_container_width=True)
-        opts=[f"{i}. {r['Task']}" for i,r in df_todo.iterrows()]; sel=st.selectbox("Pilih:", opts, key="st") if opts else None
-        c_a1,c_a2=st.columns(2)
-        if sel:
-            idx=int(sel.split(".")[0])+2
-            if c_a1.button("✅ Selesai"): sheets["todo"].update_cell(idx,4,"Selesai"); clear_cache_and_rerun()
-            if c_a2.button("🗑️ Hapus"): sheets["todo"].delete_rows(idx); clear_cache_and_rerun()
+        st.write("### 📌 Tugas Pending")
+        active_tasks = df_todo[df_todo['Status'] == 'Pending']
+        
+        if active_tasks.empty: st.info("Tidak ada tugas pending.")
+        else:
+            for i, row in active_tasks.iterrows():
+                icon = "🔥" if row['Prioritas'] == "Tinggi" else "⚠️" if row['Prioritas'] == "Sedang" else "☕"
+                with st.expander(f"{icon} {row['Task']} ({row['Prioritas']})"):
+                    st.write(f"📅 {row['Tanggal']}")
+                    c_act1, c_act2 = st.columns(2)
+                    if c_act1.button("✅ Selesai", key=f"done_{i}"):
+                        sheets["todo"].update_cell(i + 2, 4, "Selesai"); st.toast("Selesai!"); time.sleep(0.5); clear_cache_and_rerun()
+                    if c_act2.button("🗑️ Hapus", key=f"del_todo_{i}"):
+                        sheets["todo"].delete_rows(i + 2); st.toast("Dihapus"); time.sleep(0.5); clear_cache_and_rerun()
+        
+        st.divider()
+        st.subheader("🗄️ Arsip Tugas (Tahun > Bulan > Hari)")
+        render_archive_system(df_todo, 'Tanggal', 'Task', 'Status')
 
-with tab2: # UANG
+# === TAB 2: UANG (VISUAL + ARCHIVE) ===
+with tab2:
     with st.form("u"):
         c1,c2=st.columns(2); i=c1.text_input("Item"); k=c2.selectbox("Kat", ["Makan","Transport","Belanja","Tagihan","Lainnya"])
         c3,c4=st.columns(2); j=c3.number_input("Rp", step=1000); tp=c4.selectbox("Tipe", ["Pengeluaran","Pemasukan"])
         if st.form_submit_button("Simpan"): sheets["fin"].append_row([str(datetime.now()), i, k, j, tp]); clear_cache_and_rerun()
     
     if not df_fin.empty:
-        # --- GRAFIK TREN DIKEMBALIKAN ---
-        st.write("### 📉 Tren Pengeluaran")
-        df_trend = df_fin[df_fin['Tipe'] == 'Pengeluaran'].copy()
-        if not df_trend.empty:
-            df_trend['Tanggal'] = pd.to_datetime(df_trend['Tanggal']).dt.date
-            daily = df_trend.groupby('Tanggal')['Jumlah'].sum().reset_index()
-            st.plotly_chart(px.line(daily, x='Tanggal', y='Jumlah', markers=True), use_container_width=True)
+        # Grafik
+        with st.expander("📊 Grafik Keuangan"):
+            df_trend = df_fin[df_fin['Tipe'] == 'Pengeluaran'].copy()
+            if not df_trend.empty:
+                df_trend['Tanggal'] = pd.to_datetime(df_trend['Tanggal']).dt.date
+                daily = df_trend.groupby('Tanggal')['Jumlah'].sum().reset_index()
+                st.plotly_chart(px.line(daily, x='Tanggal', y='Jumlah', markers=True, title="Tren Pengeluaran"), use_container_width=True)
 
-        st.dataframe(df_fin, use_container_width=True)
-        opts=[f"{i}. {r['Item']} ({r['Jumlah']})" for i,r in df_fin.iterrows()]; sel=st.selectbox("Hapus:", opts, key="sf") if opts else None
-        if sel and st.button("Hapus Data"): sheets["fin"].delete_rows(int(sel.split(".")[0])+2); clear_cache_and_rerun()
+        st.write("### 💳 20 Transaksi Terakhir")
+        recent_fin = df_fin.tail(20)[::-1]
+        for i, row in recent_fin.iterrows():
+            color = "red" if row['Tipe'] == "Pengeluaran" else "green"
+            with st.expander(f":{color}[Rp {row['Jumlah']:,}] - {row['Item']}"):
+                st.write(f"📅 {row['Tanggal']} | 📂 {row['Kategori']}")
+                if st.button("🗑️ Hapus", key=f"del_fin_{i}"):
+                    sheets["fin"].delete_rows(i + 2); st.toast("Terhapus"); time.sleep(0.5); clear_cache_and_rerun()
 
-with tab3: # HABIT
+        st.divider()
+        st.subheader("🗄️ Arsip Keuangan (Tahun > Bulan > Hari)")
+        render_archive_system(df_fin, 'Tanggal', 'Item', 'Jumlah', 'Tipe')
+
+# === TAB 3: HABIT (VISUAL + ARCHIVE) ===
+with tab3:
     nh=st.text_input("Habit Baru")
     if st.button("Tambah"): sheets["habit"].append_row([str(date.today()), nh, "Belum"]); clear_cache_and_rerun()
     
     if not df_habit.empty:
-        # --- GRAFIK HABIT DIKEMBALIKAN ---
+        # Grafik Habit (Dikembalikan)
         df_done = df_habit[df_habit['Status'] == 'Done']
         if not df_done.empty:
             perf = df_done['Habit'].value_counts().reset_index()
@@ -245,80 +338,107 @@ with tab3: # HABIT
                 st.plotly_chart(px.bar(perf, x='Habit', y='Total Selesai', color='Total Selesai'), use_container_width=True)
 
         uh=df_habit['Habit'].unique(); today=str(date.today())
-        st.write("### Ceklis Hari Ini")
+        st.write("### ✅ Ceklis Hari Ini")
+        with st.container(border=True):
+            for h in uh:
+                done=not df_habit[(df_habit['Habit']==h)&(df_habit['Tanggal']==today)&(df_habit['Status']=='Done')].empty
+                c1,c2=st.columns([3,1]); c1.write(f"**{h}**")
+                if done: c2.success("Selesai")
+                else: 
+                    if c2.button("Ceklis", key=f"hb_{h}"): sheets["habit"].append_row([today, h, "Done"]); clear_cache_and_rerun()
+        
+        st.write("### ⚙️ Manajemen Habit")
         for h in uh:
-            done=not df_habit[(df_habit['Habit']==h)&(df_habit['Tanggal']==today)&(df_habit['Status']=='Done')].empty
-            c1,c2=st.columns([3,1]); c1.write(f"**{h}**")
-            if done: c2.success("✅")
-            else: 
-                if c2.button("Ceklis", key=f"hb_{h}"): sheets["habit"].append_row([today, h, "Done"]); clear_cache_and_rerun()
-        with st.expander("🗑️ Hapus Master Habit"):
-             opts=[f"{i}. {r['Habit']}" for i,r in df_habit.iterrows()]; sel=st.selectbox("Pilih:", opts, key="sh") if opts else None
-             if sel and st.button("Hapus Permanen"): sheets["habit"].delete_rows(int(sel.split(".")[0])+2); clear_cache_and_rerun()
+            with st.expander(f"Habit: {h}"):
+                if st.button(f"🗑️ Hapus Permanen '{h}'", key=f"del_hab_{h}"):
+                    indices = df_habit[df_habit['Habit'] == h].index
+                    sheets["habit"].delete_rows(indices[-1] + 2)
+                    st.toast(f"Entry {h} dihapus"); time.sleep(0.5); clear_cache_and_rerun()
 
-# === TAB 4: JURNAL (VISUAL LENGKAP + KARTU) ===
+# === TAB 4: JURNAL (VISUAL + ARCHIVE) ===
 with tab4:
     with st.container(border=True):
         st.subheader("Curhat ke AI")
         curhat = st.text_area("Cerita hari ini...", height=100)
         if st.button("✨ Analisis AI") and model and curhat:
             try:
-                mood = model.generate_content(f"Satu kata emosi dari teks ini (Senang/Sedih/Marah/Netral/Semangat): {curhat}").text.strip()
-                saran = model.generate_content(f"Berikan saran singkat 1 kalimat supportif untuk: {curhat}").text.strip()
+                mood = model.generate_content(f"Satu kata emosi (Senang/Sedih/Marah/Netral/Semangat): {curhat}").text.strip()
+                saran = model.generate_content(f"Berikan saran singkat 1 kalimat supportif: {curhat}").text.strip()
                 sheets["journal"].append_row([str(datetime.now()), curhat, mood, saran])
-                st.balloons()
-                clear_cache_and_rerun()
+                st.balloons(); clear_cache_and_rerun()
             except Exception as e: st.error(f"Error AI: {e}")
 
     if not df_journal.empty:
-        st.divider()
-        # 1. Grafik Mood (Line Chart)
+        # Grafik Mood (Dikembalikan)
         if 'AI_Mood' in df_journal.columns:
             try:
                 mood_map = {"Senang": 5, "Semangat": 5, "Netral": 3, "Biasa": 3, "Lelah": 2, "Sedih": 1, "Marah": 1}
                 df_journal['Score'] = df_journal['AI_Mood'].map(mood_map).fillna(3)
                 df_journal['Waktu'] = pd.to_datetime(df_journal['Tanggal'])
-                fig = px.line(df_journal, x='Waktu', y='Score', markers=True, title="Grafik Perasaan (Naik Turun Emosi)")
-                fig.update_yaxes(range=[0, 6], tickvals=[1,3,5], ticktext=["Sedih/Marah", "Netral", "Senang"])
-                st.plotly_chart(fig, use_container_width=True)
+                with st.expander("📊 Grafik Mood Tracker"):
+                    fig = px.line(df_journal, x='Waktu', y='Score', markers=True, title="Naik Turun Emosi")
+                    fig.update_yaxes(range=[0, 6], tickvals=[1,3,5], ticktext=["Sedih", "Netral", "Senang"])
+                    st.plotly_chart(fig, use_container_width=True)
             except: pass
-        
-        # 2. Interactive List (Card Style)
-        st.write("### 📖 Riwayat Jurnal")
-        for i, row in df_journal[::-1].iterrows():
-            with st.container(border=True):
-                c_head1, c_head2 = st.columns([3, 1])
-                c_head1.markdown(f"**📅 {str(row['Tanggal'])[:16]}**")
-                c_head2.markdown(f"*{row.get('AI_Mood','-')}*")
-                
-                st.write(row['Isi_Jurnal'])
-                st.info(f"💡 Advisor: {row.get('AI_Saran','-')}")
-                
-                if st.button("Hapus Entry Ini", key=f"del_j_{i}"):
-                    sheets["journal"].delete_rows(i + 2) 
-                    st.toast("Terhapus!")
-                    time.sleep(1)
-                    clear_cache_and_rerun()
 
-# === TAB 5: ADVISOR (HAPUS CHAT) ===
+        st.write("### 📖 20 Jurnal Terakhir")
+        recent_journal = df_journal.tail(20)[::-1]
+        for i, row in recent_journal.iterrows():
+            with st.expander(f"📅 {str(row['Tanggal'])[:10]} | {row.get('AI_Mood','-')}"):
+                st.write(row['Isi_Jurnal'])
+                st.info(f"💡 AI: {row.get('AI_Saran','-')}")
+                if st.button("🗑️ Hapus", key=f"del_j_{i}"):
+                    sheets["journal"].delete_rows(i + 2); st.toast("Terhapus!"); time.sleep(0.5); clear_cache_and_rerun()
+
+        st.divider()
+        st.subheader("🗄️ Arsip Cerita (Tahun > Bulan > Hari)")
+        render_archive_system(df_journal, 'Tanggal', 'Isi_Jurnal', 'AI_Mood')
+
+# === TAB 5: ADVISOR (VISUAL + ARCHIVE) ===
 with tab5:
     st.subheader("Asisten Pribadi")
-    for i, row in df_advisor.iterrows():
-        with st.chat_message("user"): st.write(row['Pertanyaan'])
-        with st.chat_message("assistant"): st.write(row['Jawaban'])
     
-    q = st.chat_input("Tanya saran, ide, atau curhat...")
+    q = st.chat_input("Tanya...")
     if q and model:
         with st.chat_message("user"): st.write(q)
         with st.chat_message("assistant"):
-            res = model.generate_content(q).text
-            st.write(res)
-            sheets["advisor"].append_row([str(datetime.now()), q, res])
-    
+            res = model.generate_content(q).text; st.write(res); sheets["advisor"].append_row([str(datetime.now()), q, res]); st.rerun()
+
     st.divider()
-    with st.expander("🗑️ Pengaturan Chat"):
-        if st.button("🔥 Hapus Semua Chat Advisor"):
-            sheets["advisor"].resize(rows=1)
-            sheets["advisor"].resize(rows=1000)
-            sheets["advisor"].update("A1:C1", [["Timestamp", "Pertanyaan", "Jawaban"]])
-            st.success("Chat bersih!"); time.sleep(1); clear_cache_and_rerun()
+    st.subheader("🗄️ Arsip Percakapan (Tahun > Bulan > Hari)")
+    render_archive_system(df_advisor, 'Timestamp', 'Pertanyaan', 'Jawaban')
+
+    if st.button("🔥 Hapus Semua Chat (Reset)"):
+        sheets["advisor"].resize(rows=1); sheets["advisor"].resize(rows=1000); sheets["advisor"].update("A1:C1", [["Timestamp", "Pertanyaan", "Jawaban"]])
+        st.success("Chat bersih!"); time.sleep(1); clear_cache_and_rerun()
+
+# === TAB 6: DATABASE (ADMIN ONLY) ===
+with tab6:
+    st.header("🗄️ Database Center (Admin)")
+    st.warning("Hati-hati! Tab ini menampilkan data mentah. Menghapus data di sini bersifat permanen.")
+    
+    tab_db1, tab_db2, tab_db3, tab_db4, tab_db5 = st.tabs(["ToDo", "Finance", "Habit", "Journal", "Advisor"])
+    
+    def render_admin_table(df, sheet_name, sheet_obj):
+        if not df.empty:
+            st.dataframe(df, use_container_width=True)
+            st.write(f"**Total Data: {len(df)} Baris**")
+            
+            c_del1, c_del2 = st.columns([3, 1])
+            with c_del1:
+                row_to_del = st.number_input(f"Hapus Baris ID (Index) di {sheet_name}:", min_value=0, max_value=len(df)-1, step=1, key=f"num_{sheet_name}")
+            with c_del2:
+                st.write(""); st.write("")
+                if st.button(f"🗑️ Hapus ID {row_to_del}", key=f"btn_del_{sheet_name}"):
+                    sheet_obj.delete_rows(row_to_del + 2)
+                    st.success(f"Baris {row_to_del} dihapus!")
+                    time.sleep(1)
+                    clear_cache_and_rerun()
+        else:
+            st.info("Tabel Kosong")
+
+    with tab_db1: render_admin_table(df_todo, "ToDo", sheets["todo"])
+    with tab_db2: render_admin_table(df_fin, "Finance", sheets["fin"])
+    with tab_db3: render_admin_table(df_habit, "Habit", sheets["habit"])
+    with tab_db4: render_admin_table(df_journal, "Journal", sheets["journal"])
+    with tab_db5: render_admin_table(df_advisor, "Advisor", sheets["advisor"])
